@@ -7,6 +7,23 @@ import queue
 
 
 ########################################################################################################################
+#####################################################   HELPERS   ######################################################
+########################################################################################################################
+
+def wcscmp (str_a, str_b):
+    """
+    Standard library wcscmp
+    """
+    for a, b in zip(str_a, str_b):
+        tmp = ord(a) - ord(b)
+        if tmp != 0: return -1 if tmp < 0 else 1
+
+    tmp = len(str_a) - len(str_b)
+    return -1 if tmp < 0 else 1 if tmp > 0 else 0
+
+
+
+########################################################################################################################
 ####################################################   EXCEPTIONS   ####################################################
 ########################################################################################################################
 
@@ -37,7 +54,7 @@ class MagicError (Ext4Error):
 
 
 ########################################################################################################################
-####################################################   LOW LEVEL    ####################################################
+####################################################   LOW LEVEL   #####################################################
 ########################################################################################################################
 
 class ext4_struct (ctypes.LittleEndianStructure):
@@ -296,19 +313,6 @@ class ext4_superblock (ext4_struct):
 
 
 
-def wcscmp (str_a, str_b):
-    """
-    Standard library wcscmp
-    """
-    for a, b in zip(str_a, str_b):
-        tmp = ord(a) - ord(b)
-        if tmp != 0: return -1 if tmp < 0 else 1
-
-    tmp = len(str_a) - len(str_b)
-    return -1 if tmp < 0 else 1 if tmp > 0 else 0
-
-
-
 ########################################################################################################################
 ####################################################   HIGH LEVEL   ####################################################
 ########################################################################################################################
@@ -319,6 +323,9 @@ class MappingEntry:
     by disk_block_idx.
     """
     def __init__ (self, file_block_idx, disk_block_idx, block_count = 1):
+        """
+        Initialize a MappingEntry instance with given file_block_idx, disk_block_idx and block_count.
+        """
         self.file_block_idx = file_block_idx
         self.disk_block_idx = disk_block_idx
         self.block_count = block_count
@@ -500,12 +507,11 @@ class Inode:
         else:
             return f"{type(self).__name__:s}(offset = 0x{self.offset:X}, volume_uuid = {self.volume.uuid!r:s})"
 
-    @functools.cmp_to_key
-    def directory_entry_key (dir_a, dir_b):
+    def directory_entry_comparator (dir_a, dir_b):
         """
-        Sort-key for directory entries. It sortes entries in a way that directories come before anything and within a group
-        entries are sorted by their lower-case name. Entries whose lower-case names are equal are sorted by their case-
-        sensitive names.
+        Sort-key for directory entries. It sortes entries in a way that directories come before anything else and within
+        a group (directory / anything else) entries are sorted by their lower-case name. Entries whose lower-case names
+        are equal are sorted by their actual names.
         """
         file_name_a, _, file_type_a = dir_a
         file_name_b, _, file_type_b = dir_b
@@ -516,13 +522,15 @@ class Inode:
         else:
             return -1 if file_type_a == Inode.IT_DIRECTORY else 1
 
+    directory_entry_key = functools.cmp_to_key(directory_entry_comparator)
+
     def get_inode (self, *relative_path, decode_name = None):
         """
         Returns the inode specified by the path relative_path (list of entry names) relative to this inode. "." and ".."
         usually are supported too, however in special cases (e.g. manually crafted volumes) they might not be supported
         due to them being real on-disk directory entries that might be missing or pointing somewhere else.
         decode_name is directly passed to open_dir.
-        NOTE: Whitespaces will not be trimmed off the path's parts and "\0" and "\0\0" as well as b"\0" and b"\0\0" are
+        NOTE: Whitespaces will not be trimmed off the path's parts and "\\0" and "\\0\\0" as well as b"\\0" and b"\\0\\0" are
         seen as different names (unless decode_name actually trims the name).
         NOTE: Along the path file_type != IT_DIRECTORY will be ignored, however i_flags will not be ignored.
         """
@@ -617,8 +625,9 @@ class Inode:
     def open_dir (self, decode_name = None):
         """
         Generator: Yields the directory entries as tuples (decode_name(name), inode, file_type) in their on-disk order,
-        where name is the raw on-disk directory entry name. For special cases (e.g. invalid utf8 characters in entry
-        names) you can try a different decoder (e.g. decode_name = lambda raw: raw).
+        where name is the raw on-disk directory entry name (bytes). file_type is one of the Inode.IT_* constants. For
+        special cases (e.g. invalid utf8 characters in entry names) you can try a different decoder (e.g.
+        decode_name = lambda raw: raw).
         Default of decode_name = lambda raw: raw.decode("utf8")
         """
         # Parse args
@@ -661,10 +670,10 @@ class Inode:
         """
         Returns an BlockReader instance for reading this inode's raw content.
         """
-        # Obtain mapping from extents / hash tree or read inline data
-        mapping = [] # List of MappingEntry instances
         if (self.inode.i_flags & ext4_inode.EXT4_EXTENTS_FL) != 0:
-            # Uses extents
+            # Obtain mapping from extents
+            mapping = [] # List of MappingEntry instances
+
             nodes = queue.Queue()
             nodes.put_nowait(self.offset + ext4_inode.i_block.offset)
 
@@ -680,17 +689,15 @@ class Inode:
                     for idx in indices: nodes.put_nowait(idx.ei_leaf * self.volume.block_size)
                 else:
                     extents = self.volume.read_struct(ext4_extent * header.eh_entries, header_offset + ctypes.sizeof(ext4_extent_header))
-                    for extent in extents: mapping.append(MappingEntry(extent.ee_block, extent.ee_start, extent.ee_len))
+                    for extent in extents:
+                        mapping.append(MappingEntry(extent.ee_block, extent.ee_start, extent.ee_len))
 
-        elif (self.inode.I_flags & ext4_inode.EXT4_INLINE_DATA_FL) != 0:
-            # Uses inline data
-            return io.BytesIO(self.volume.read(self.offset + ext4_inode.i_block.offset, self.inode.i_size))
-
+            MappingEntry.optimize(mapping)
+            return BlockReader(self.volume, len(self), mapping)
         else:
-            raise Ext4Error("Unknown data storage mechanism.")
-
-        MappingEntry.optimize(mapping)
-        return BlockReader(self.volume, len(self), mapping)
+            # Inode uses inline data
+            i_block = self.volume.read(self.offset + ext4_inode.i_block.offset, ext4_inode.i_block.size)
+            return io.BytesIO(i_block[:self.inode.i_size])
 
     @property
     def size_readable (self):
@@ -881,37 +888,72 @@ class Tools:
         identifier,
         decode_name = None,
         sort_key = Inode.directory_entry_key,
-        line_format = "{inode.mode_str:s}  {file_name:s}",
+        line_format = None,
         file_types = {0 : "unkn", 1 : "file", 2 : "dir", 3 : "chr", 4 : "blk", 5 : "fifo", 6 : "sock", 7 : "sym"}
     ):
         """
         Similar to "ls -la" this function lists all entries from a directory of volume.
 
-        identifier might be an integer describing the directory's inode index, a str/bytes describing directory's full path or
-        a list of entry names. decode_name is directly passed to open_dir. See Inode.get_inode for more details.
+        identifier might be an Inode instance, an integer describing the directory's inode index, a str/bytes describing
+        the directory's full path or a list of entry names. decode_name is directly passed to open_dir. See Inode.get_inode
+        for more details.
 
-        sort_key is the key-function used for sorting the directories entries. If None is passed, the call to sorted is omitted.
+        sort_key is the key-function used for sorting the directories entries. If None is passed, the call to sorted is
+        omitted.
 
-        line_format is a format string specifying each line's format. It is used as follows:
-        line_format.format(
-            file_name = file_name, # Entry name
-            inode = volume.get_inode(inode_idx), # Referenced inode
-            file_type = file_type, # Entry type (int)
-            file_type_str = file_types[file_type] if file_type in file_types else "?" # Entry type (str, see next paragraph)
-        )
+        line_format is a format string specifying each line's format or a function formatting each line. It is used as
+        follows:
+
+            line_format(
+                file_name = file_name, # Entry name
+                inode = volume.get_inode(inode_idx), # Referenced inode
+                file_type = file_type, # Entry type (int)
+                file_type_str = file_types[file_type] if file_type in file_types else "?" # Entry type (str, see next paragraph)
+            )
+
+        The default of line_format is the following function:
+
+            def line_format (file_name, inode, file_type, file_type_str):
+                if file_type == Inode.IT_SYMBOLIC_LINK:
+                    link_target = inode.open_read().read().decode("utf8")
+                    return f"{inode.mode_str:s}  {inode.size_readable: >10s}  {file_name:s}  ->  {link_target:s}"
+                else:
+                    return f"{inode.mode_str:s}  {inode.size_readable: >10s}  {file_name:s}"
 
         file_types is a dictionary specifying the names of the different entry types.
         """
-        if isinstance(identifier, int):
+        # Parse arguments
+        if isinstance(identifier, Inode):
+            inode = identifier
+        elif isinstance(identifier, int):
             inode = volume.get_inode(identifier)
         elif isinstance(identifier, str):
-            inode = volume.root.get_inode(*identifier.strip(" /").split("/"))
+            identifier = identifier.strip(" /").split("/")
+
+            if len(identifier) == 1 and identifier[0] == "":
+                inode = volume.root
+            else:
+                inode = volume.root.get_inode(*identifier)
         elif isinstance(identifier, list):
             inode = volume.root.get_inode(*identifier)
 
+        if line_format == None:
+            def _line_format (file_name, inode, file_type, file_type_str):
+                if file_type == Inode.IT_SYMBOLIC_LINK:
+                    link_target = inode.open_read().read().decode("utf8")
+                    return f"{inode.mode_str:s}  {inode.size_readable: >10s}  {file_name:s}  ->  {link_target:s}"
+                else:
+                    return f"{inode.mode_str:s}  {inode.size_readable: >10s}  {file_name:s}"
+
+            line_format = _line_format
+        elif isinstance(line_format, str):
+            line_format = line_format.format
+
+        # Print directory
         entries = inode.open_dir(decode_name) if sort_key is None else sorted(inode.open_dir(decode_name), key = sort_key)
+
         for file_name, inode_idx, file_type in entries:
-            print(line_format.format(
+            print(line_format(
                 file_name = file_name,
                 inode = volume.get_inode(inode_idx),
                 file_type = file_type,
