@@ -215,6 +215,9 @@ class ext4_inode (ext4_struct):
 
 
 class ext4_superblock (ext4_struct):
+    # s_feature_incompat
+    INCOMPAT_64BIT = 0x80 # Uses 64-bit features (e.g. *_hi structure fields in ext4_group_descriptor)
+
     _fields_ = [
         ("s_inodes_count", ctypes.c_uint),                 # 0x0000
         ("s_blocks_count_lo", ctypes.c_uint),              # 0x0004
@@ -405,6 +408,20 @@ class Volume:
         for group_desc_idx in range(len(self.group_descriptors)):
             group_desc_offset = group_desc_table_offset + group_desc_idx * self.superblock.s_desc_size
             self.group_descriptors[group_desc_idx] = self.read_struct(ext4_group_descriptor, group_desc_offset)
+
+            # Zero 64-bit fields if INCOMPAT_64BIT is not set
+            if (self.superblock.s_feature_incompat & ext4_superblock.INCOMPAT_64BIT) == 0:
+                self.group_descriptors[group_desc_idx].bg_block_bitmap_hi = 0
+                self.group_descriptors[group_desc_idx].bg_inode_bitmap_hi = 0
+                self.group_descriptors[group_desc_idx].bg_inode_table_hi = 0
+                self.group_descriptors[group_desc_idx].bg_free_blocks_count_hi = 0
+                self.group_descriptors[group_desc_idx].bg_free_inodes_count_hi = 0
+                self.group_descriptors[group_desc_idx].bg_used_dirs_count_hi = 0
+                self.group_descriptors[group_desc_idx].bg_itable_unused_hi = 0
+                self.group_descriptors[group_desc_idx].bg_exclude_bitmap_hi = 0
+                self.group_descriptors[group_desc_idx].bg_block_bitmap_csum_hi = 0
+                self.group_descriptors[group_desc_idx].bg_inode_bitmap_csum_hi = 0
+                self.group_descriptors[group_desc_idx].bg_reserved = 0
 
     def __repr__ (self):
         return f"{type(self).__name__:s}(volume_name = {self.superblock.s_volume_name!r:s}, uuid = {self.uuid!r:s}, last_mounted = {self.superblock.s_last_mounted!r:s})"
