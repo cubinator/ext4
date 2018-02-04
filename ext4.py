@@ -93,6 +93,22 @@ class ext4_struct (ctypes.LittleEndianStructure):
 
 
 
+class ext4_dir_entry_2 (ext4_struct):
+    _fields_ = [
+        ("inode", ctypes.c_uint),       # 0x0
+        ("rec_len", ctypes.c_ushort),   # 0x4
+        ("name_len", ctypes.c_ubyte),   # 0x6
+        ("file_type", ctypes.c_ubyte)   # 0x7
+        # Variable length field "name" missing at 0x8
+    ]
+
+    def _from_buffer_copy (buffer, offset = 0):
+        struct = ext4_dir_entry_2.from_buffer_copy(buffer, offset)
+        struct.name = buffer[offset + 0x8 : offset + 0x8 + struct.name_len]
+        return struct
+
+
+
 class ext4_extent (ext4_struct):
     _fields_ = [
         ("ee_block", ctypes.c_uint),      # 0x0000
@@ -156,6 +172,8 @@ class ext4_group_descriptor (ext4_struct):
 
 
 class ext4_inode (ext4_struct):
+    EXT2_GOOD_OLD_INODE_SIZE = 128 # Every field passing 128 bytes is "additional data", whose size is specified by i_extra_isize.
+
     # i_mode
     S_IXOTH  =    0x1 # Others can execute
     S_IWOTH  =    0x2 # Others can write
@@ -180,36 +198,42 @@ class ext4_inode (ext4_struct):
     # i_flags
     EXT4_INDEX_FL       =     0x1000 # Uses hash trees
     EXT4_EXTENTS_FL     =    0x80000 # Uses extents
+    EXT4_EA_INODE_FL    =   0x200000 # Inode stores large xattr
     EXT4_INLINE_DATA_FL = 0x10000000 # Has inline data
 
     _fields_ = [
-        ("i_mode", ctypes.c_ushort),        # 0x0000
-        ("i_uid", ctypes.c_ushort),         # 0x0002
-        ("i_size_lo", ctypes.c_uint),       # 0x0004
-        ("i_atime", ctypes.c_uint),         # 0x0008
-        ("i_ctime", ctypes.c_uint),         # 0x000C
-        ("i_mtime", ctypes.c_uint),         # 0x0010
-        ("i_dtime", ctypes.c_uint),         # 0x0014
-        ("i_gid", ctypes.c_ushort),         # 0x0018
-        ("i_links_count", ctypes.c_ushort), # 0x001A
-        ("i_blocks_lo", ctypes.c_uint),     # 0x001C
-        ("i_flags", ctypes.c_uint),         # 0x0020
-        ("osd1", ctypes.c_uint),            # 0x0024
-        ("i_block", ctypes.c_uint * 15),    # 0x0028
-        ("i_generation", ctypes.c_uint),    # 0x0064
-        ("i_file_acl_lo", ctypes.c_uint),   # 0x0068
-        ("i_size_hi", ctypes.c_uint),       # 0x006C, Originally named i_size_high
-        ("i_obso_faddr", ctypes.c_uint),    # 0x0070
-        ("osd2", ctypes.c_byte * 12),       # 0x0074
-        ("i_extra_isize", ctypes.c_ushort), # 0x0080
-        ("i_checksum_hi", ctypes.c_ushort), # 0x0082
-        ("i_ctime_extra", ctypes.c_uint),   # 0x0084
-        ("i_mtime_extra", ctypes.c_uint),   # 0x0088
-        ("i_atime_extra", ctypes.c_uint),   # 0x008C
-        ("i_crtime", ctypes.c_uint),        # 0x0090
-        ("i_crtime_extra", ctypes.c_uint),  # 0x0094
-        ("i_version_hi", ctypes.c_uint),    # 0x0098
-        ("i_projid", ctypes.c_uint),        # 0x009C
+        ("i_mode", ctypes.c_ushort),             # 0x0000
+        ("i_uid_lo", ctypes.c_ushort),           # 0x0002, Originally named i_uid
+        ("i_size_lo", ctypes.c_uint),            # 0x0004
+        ("i_atime", ctypes.c_uint),              # 0x0008
+        ("i_ctime", ctypes.c_uint),              # 0x000C
+        ("i_mtime", ctypes.c_uint),              # 0x0010
+        ("i_dtime", ctypes.c_uint),              # 0x0014
+        ("i_gid_lo", ctypes.c_ushort),           # 0x0018, Originally named i_gid
+        ("i_links_count", ctypes.c_ushort),      # 0x001A
+        ("i_blocks_lo", ctypes.c_uint),          # 0x001C
+        ("i_flags", ctypes.c_uint),              # 0x0020
+        ("osd1", ctypes.c_uint),                 # 0x0024
+        ("i_block", ctypes.c_uint * 15),         # 0x0028
+        ("i_generation", ctypes.c_uint),         # 0x0064
+        ("i_file_acl_lo", ctypes.c_uint),        # 0x0068
+        ("i_size_hi", ctypes.c_uint),            # 0x006C, Originally named i_size_high
+        ("i_obso_faddr", ctypes.c_uint),         # 0x0070
+        ("i_osd2_blocks_high", ctypes.c_ushort), # 0x0074, Originally named i_osd2.linux2.l_i_blocks_high
+        ("i_file_acl_hi", ctypes.c_ushort),      # 0x0076, Originally named i_osd2.linux2.l_i_file_acl_high
+        ("i_uid_hi", ctypes.c_ushort),           # 0x0078, Originally named i_osd2.linux2.l_i_uid_high
+        ("i_gid_hi", ctypes.c_ushort),           # 0x007A, Originally named i_osd2.linux2.l_i_gid_high
+        ("i_osd2_checksum_lo", ctypes.c_ushort), # 0x007C, Originally named i_osd2.linux2.l_i_checksum_lo
+        ("i_osd2_reserved", ctypes.c_ushort),    # 0x007E, Originally named i_osd2.linux2.l_i_reserved
+        ("i_extra_isize", ctypes.c_ushort),      # 0x0080
+        ("i_checksum_hi", ctypes.c_ushort),      # 0x0082
+        ("i_ctime_extra", ctypes.c_uint),        # 0x0084
+        ("i_mtime_extra", ctypes.c_uint),        # 0x0088
+        ("i_atime_extra", ctypes.c_uint),        # 0x008C
+        ("i_crtime", ctypes.c_uint),             # 0x0090
+        ("i_crtime_extra", ctypes.c_uint),       # 0x0094
+        ("i_version_hi", ctypes.c_uint),         # 0x0098
+        ("i_projid", ctypes.c_uint),             # 0x009C
     ]
 
 
@@ -312,6 +336,46 @@ class ext4_superblock (ext4_struct):
         ("s_checksum_seed", ctypes.c_uint),                # 0x0270
         ("s_reserved", ctypes.c_uint * 98),                # 0x0274
         ("s_checksum", ctypes.c_uint)                      # 0x03FC
+    ]
+
+
+
+class ext4_xattr_entry (ext4_struct):
+    _fields_ = [
+        ("e_name_len", ctypes.c_ubyte),      # 0x00
+        ("e_name_index", ctypes.c_ubyte),    # 0x01
+        ("e_value_offs", ctypes.c_ushort),   # 0x02
+        ("e_value_inum", ctypes.c_uint),     # 0x04
+        ("e_value_size", ctypes.c_uint),     # 0x08
+        ("e_hash", ctypes.c_uint)            # 0x0C
+        # Variable length field "e_name" missing at 0x10
+    ]
+
+    def _from_buffer_copy (buffer, offset = 0):
+        struct = ext4_xattr_entry.from_buffer_copy(buffer, offset)
+        struct.e_name = buffer[offset + 0x10 : offset + 0x10 + struct.e_name_len]
+        return struct
+
+    @property
+    def _size (self): return 4 * ((ctypes.sizeof(type(self)) + self.e_name_len + 3) // 4) # 4-byte alignment
+
+
+
+class ext4_xattr_header (ext4_struct):
+    _fields_ = [
+        ("h_magic", ctypes.c_uint),        # 0x0, Must be 0xEA020000
+        ("h_refcount", ctypes.c_uint),     # 0x4
+        ("h_blocks", ctypes.c_uint),       # 0x8
+        ("h_hash", ctypes.c_uint),         # 0xC
+        ("h_checksum", ctypes.c_uint),     # 0x10
+        ("h_reserved", ctypes.c_uint * 3), # 0x14
+    ]
+
+
+
+class ext4_xattr_ibody_header (ext4_struct):
+    _fields_ = [
+        ("h_magic", ctypes.c_uint) # 0x0, Must be 0xEA020000
     ]
 
 
@@ -442,7 +506,7 @@ class Volume:
         inode_table_offset = self.group_descriptors[group_idx].bg_inode_table * self.block_size
         inode_offset = inode_table_offset + inode_table_entry_idx * self.superblock.s_inode_size
 
-        return Inode(self, inode_offset, inode_idx = inode_idx)
+        return Inode(self, inode_offset, inode_idx)
 
     def get_inode_group (self, inode_idx):
         """
@@ -465,7 +529,12 @@ class Volume:
         """
         Interprets the bytes at offset as structure and returns the interpreted instance
         """
-        return structure.from_buffer_copy(self.read(offset, ctypes.sizeof(structure)))
+        raw = self.read(offset, ctypes.sizeof(structure))
+
+        if hasattr(structure, "_from_buffer_copy"):
+            return structure._from_buffer_copy(raw)
+        else:
+            return structure.from_buffer_copy(raw)
 
     @property
     def root (self):
@@ -501,10 +570,11 @@ class Inode:
     IT_SYMBOLIC_LINK    =  0x7
     IT_CHECKSUM         = 0xDE
 
-    def __init__ (self, volume, offset, inode_idx = None, inode_name = None):
+    def __init__ (self, volume, offset, inode_idx, inode_name = None):
         """
         Initializes a new inode parser at the specified offset within the specified volume. inode_idx is just used to
-        give the inode a readable representation.
+        give the inode a readable representation and for useful error messages (though without inode_idx most exceptions
+        will not work)
         """
         self.inode_idx = inode_idx
         self.offset = offset
@@ -523,6 +593,64 @@ class Inode:
             return f"{type(self).__name__:s}(inode_idx = {self.inode_idx!r:s}, offset = 0x{self.offset:X}, volume_uuid = {self.volume.uuid!r:s})"
         else:
             return f"{type(self).__name__:s}(offset = 0x{self.offset:X}, volume_uuid = {self.volume.uuid!r:s})"
+
+    def _parse_xattrs (self, raw_data, offset, prefix_override = {}):
+        """
+        Generator: Parses raw_data (bytes) as ext4_xattr_entry structures and their referenced xattr values and yields
+        tuples (xattr_name, xattr_value) where xattr_name (str) is the attribute name including its prefix and
+        xattr_value (bytes) is the raw attribute value.
+        raw_data must start with the first ext4_xattr_entry structure and offset specifies the offset to the "block start"
+        for ext4_xattr_entry.e_value_offs.
+        prefix_overrides allows specifying attributes apart from the default prefixes. The default prefix dictionary is
+        updated with prefix_overrides.
+        """
+        prefixes = {
+            0: "",
+            1: "user.",
+            2: "system.posix_acl_access",
+            3: "system.posix_acl_default",
+            4: "trusted.",
+            6: "security.",
+            7: "system.",
+            8: "system.richacl"
+        }
+        prefixes.update(prefixes)
+
+        # Iterator over ext4_xattr_entry structures
+        i = 0
+        while i < len(raw_data):
+            xattr_entry = ext4_xattr_entry._from_buffer_copy(raw_data, i)
+
+            if (xattr_entry.e_name_len | xattr_entry.e_name_index | xattr_entry.e_value_offs | xattr_entry.e_value_inum) == 0:
+                # End of ext4_xattr_entry list
+                break
+
+            if not xattr_entry.e_name_index in prefixes:
+                raise Ext4Error(f"Unknown attribute prefix {xattr_entry.e_name_index:d} in inode {self.inode_idx:d}")
+
+            xattr_name = prefixes[xattr_entry.e_name_index] + xattr_entry.e_name.decode("iso-8859-2")
+
+            if xattr_entry.e_value_inum != 0:
+                # external xattr
+                xattr_inode = self.volume.get_inode(xattr.e_value_inum)
+
+                if not self.volume.ignore_flags and (xattr_inode.inode.i_flags & ext4_inode.EXT4_EA_INODE_FL) != 0:
+                    raise Ext4Error(f"Inode {xattr_inode.inode_idx:d} associated with the extended attribute {xattr_name!r:s} of inode {self.inode_idx:d} is not marked as large extended attribute value.")
+
+                # TODO Use xattr_entry.e_value_size or xattr_inode.inode.i_size?
+                xattr_value = xattr_inode.open_read().read()
+            else:
+                # internal xattr
+                xattr_value = raw_data[xattr_entry.e_value_offs + offset : xattr_entry.e_value_offs + offset + xattr_entry.e_value_size]
+
+            if not xattr_entry.e_name_index in prefixes:
+                raise Ext4Error("")
+
+            yield (xattr_name, xattr_value)
+
+            i += xattr_entry._size
+
+
 
     def directory_entry_comparator (dir_a, dir_b):
         """
@@ -655,33 +783,20 @@ class Inode:
             raise Ext4Error(f"Inode ({self.inode_idx:d}) is not a directory.")
 
         # # Hash trees are compatible with linear arrays
-        # if (self.inode.i_flags & ext4_inode.EXT4_INDEX_FL) != 0:
-        #     raise NotImplementedError("Hash trees are not implemented yet.")
+        if (self.inode.i_flags & ext4_inode.EXT4_INDEX_FL) != 0:
+            raise NotImplementedError("Hash trees are not implemented yet.")
 
         # Read raw directory content
-        # TODO: Implement buffering
         raw_data = self.open_read().read()
         offset = 0
 
         while offset < len(raw_data):
-            # ext4_dir_entry_2:
-            #   0x0  __le32 inode           // Referenced inode
-            #   0x4  __le16 rec_len         // Byte size of this entry's structure
-            #   0x6  __u8   name_len        // Byte length of this entry's name
-            #   0x7  __u8   file_type       // Type of this entry. See Inode.IT_* constants
-            #   0x8  char   name[name_len]  // Name of this entry
+            dirent = ext4_dir_entry_2._from_buffer_copy(raw_data, offset)
 
-            file_type = raw_data[offset + 7]
-            rec_len = (raw_data[offset + 5] << 8) | raw_data[offset + 4]
+            if dirent.file_type != Inode.IT_CHECKSUM:
+                yield (decode_name(dirent.name), dirent.inode, dirent.file_type)
 
-            if file_type != Inode.IT_CHECKSUM:
-                inode = int.from_bytes(raw_data[offset : offset + 4], "little")
-                name_len = raw_data[offset + 6]
-                name = decode_name(raw_data[offset + 8 : offset + 8 + name_len])
-
-                yield (name, inode, file_type)
-
-            offset += rec_len
+            offset += dirent.rec_len
 
     def open_read (self):
         """
@@ -729,6 +844,45 @@ class Inode:
             unit_idx = min(int(math.log(self.inode.i_size, 1024)), len(units))
 
             return f"{self.inode.i_size / (1024 ** unit_idx):.2f} {units[unit_idx - 1]:s}"
+
+    def xattrs (self, check_inline = True, check_block = True, force_inline = False, prefix_override = {}):
+        """
+        Generator: Yields the inode's extended attributes as tuples (name, value) in their on-disk order, where name (str)
+        is the on-disk attribute name including its resolved name prefix and value (bytes) is the raw attribute value.
+        check_inline and check_block control where to read attributes (the inode's inline data and/or the external data block
+        pointed to by i_file_acl) and if check_inline as well as force_inline are set to True, the inode's inline data
+        will not be verified to contain actual extended attributes and instead is just interpreted as such. prefix_overrides
+        is directly passed to Inode._parse_xattrs.
+        """
+        # Inline xattrs
+        inline_data_offset = self.offset + ext4_inode.EXT2_GOOD_OLD_INODE_SIZE + self.inode.i_extra_isize
+        inline_data_length = self.offset + self.volume.superblock.s_inode_size - inline_data_offset
+
+        if check_inline and inline_data_length > ctypes.sizeof(ext4_xattr_ibody_header):
+            inline_data = self.volume.read(inline_data_offset, inline_data_length)
+            xattrs_header = ext4_xattr_ibody_header.from_buffer_copy(inline_data)
+
+            # TODO Find way to detect inline xattrs without checking the h_magic field to enable error detection with the h_magic field.
+            if force_inline or xattrs_header.h_magic == 0xEA020000:
+                offset = 4 * ((ctypes.sizeof(ext4_xattr_ibody_header) + 3) // 4) # The ext4_xattr_entry following the header is aligned on a 4-byte boundary
+                for xattr_name, xattr_value in self._parse_xattrs(inline_data[offset:], 0, prefix_override = prefix_override):
+                    yield (xattr_name, xattr_value)
+
+        # xattr block(s)
+        if check_block and self.inode.i_file_acl != 0:
+            xattrs_block_start = self.inode.i_file_acl * self.volume.block_size
+            xattrs_block = self.volume.read(xattrs_block_start, self.volume.block_size)
+
+            xattrs_header = ext4_xattr_header.from_buffer_copy(xattrs_block)
+            if not self.volume.ignore_magic and xattrs_header.h_magic != 0xEA020000:
+                raise MagicError(f"Invalid magic value in xattrs block header at offset 0x{xattrs_block_start:X} of inode {self.inode_idx:d}: 0x{xattrs_header.h_magic} (expected 0xEA020000)")
+
+            if xattrs_header.h_blocks != 1:
+                raise Ext4Error(f"Invalid number of xattr blocks at offset 0x{xattrs_block_start:X} of inode {self.inode_idx:d}: {xattrs_header.h_blocks:d} (expected 1)")
+
+            offset = 4 * ((ctypes.sizeof(ext4_xattr_header) + 3) // 4) # The ext4_xattr_entry following the header is aligned on a 4-byte boundary
+            for xattr_name, xattr_value in self._parse_xattrs(xattrs_block[offset:], -offset, prefix_override = prefix_override):
+                yield (xattr_name, xattr_value)
 
 
 
