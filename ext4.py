@@ -433,7 +433,9 @@ class MappingEntry:
 
         idx = 0
         while idx < len(entries):
-            while idx + 1 < len(entries) and entries[idx].disk_block_idx + entries[idx].block_count == entries[idx + 1].disk_block_idx:
+            while idx + 1 < len(entries) \
+                    and entries[idx].file_block_idx + entries[idx].block_count == entries[idx + 1].file_block_idx \
+                    and entries[idx].disk_block_idx + entries[idx].block_count == entries[idx + 1].disk_block_idx:
                 tmp = entries.pop(idx + 1)
                 entries[idx].block_count += tmp.block_count
 
@@ -905,11 +907,6 @@ class BlockReader:
 
         block_map = list(map(MappingEntry.copy, block_map))
 
-        # Check block count
-        block_count_sum = sum(entry.block_count for entry in block_map)
-        if block_count_sum != (byte_size - 1) // volume.block_size + 1:
-            raise BlockMapError("byte_size doesn't match up with count of mapped blocks")
-
         # Optimize mapping (stich together)
         MappingEntry.optimize(block_map)
         self.block_map = block_map
@@ -930,42 +927,7 @@ class BlockReader:
                 disk_block_idx = entry.disk_block_idx + block_diff
                 break
 
-        if disk_block_idx == None:
-            raise BlockMapError(f"File block 0x{file_block_idx:X} is not mapped to disk")
-
         return disk_block_idx
-
-    def get_range_mapping (self, file_block_idx, block_count):
-        """
-        Returns a sequence of MappingEntry instances ordered by file_block_idx.
-        """
-        # Find intersections
-        mapping = list(map(
-            MappingEntry.copy,
-            filter(
-                lambda entry:
-                    entry.file_block_idx <= file_block_idx < entry.file_block_idx + entry.block_count
-                    or file_block_idx <= entry.file_block_idx < file_block_idx + block_count,
-                self.block_map
-            )
-        ))
-
-        if len(mapping) == 0:
-            raise BlockMapError(f"File block 0x{file_block_idx:X} is not mapped to disk")
-
-        # Trim left
-        diff = file_block_idx - mapping[0].file_block_idx
-        if diff > 0:
-            mapping[0].file_block_idx += diff
-            mapping[0].disk_block_idx += diff
-            mapping[0].block_count -= diff
-
-        # Trim right
-        diff = (mapping[-1].file_block_idx + mapping[-1].block_count) - (file_block_idx + block_count)
-        if diff > 0:
-            mapping[-1].block_count -= diff
-
-        return mapping
 
     def read (self, byte_len = -1):
         """
@@ -980,46 +942,37 @@ class BlockReader:
 
         if byte_len == 0: return b""
 
-        # Lookup optimization
-        file_block_idx = self.cursor // self.volume.block_size
-        offset = self.cursor % self.volume.block_size
+        # Reading blocks
+        start_block_idx = self.cursor // self.volume.block_size
+        end_block_idx = (self.cursor + byte_len - 1) // self.volume.block_size
         end_of_stream_check = byte_len
 
-        if file_block_idx == (self.cursor + byte_len - 1) // self.volume.block_size:
-            # Content within same block
-            disk_block_idx = self.get_block_mapping(file_block_idx)
-            result = self.volume.read(disk_block_idx * self.volume.block_size + offset, byte_len)
-        else:
-            block_count = (byte_len - 1) // self.volume.block_size + 1
-            mapping = self.get_range_mapping(file_block_idx, block_count)
+        blocks = [self.read_block(i) for i in range(start_block_idx, end_block_idx - start_block_idx + 1)]
 
-            if len(mapping) == 1:
-                # Content within a single block chain
-                result = self.volume.read(mapping[0].disk_block_idx * self.volume.block_size + offset, byte_len)
-            else:
-                # Content sprayed all over the place
-                blocks = []
+        start_offset = self.cursor % self.volume.block_size
+        if start_offset != 0: blocks[0] = blocks[0][start_offset:]
+        byte_len = (byte_len + start_offset - self.volume.block_size - 1) % self.volume.block_size + 1
+        blocks[-1] = blocks[-1][:byte_len]
 
-                blocks.append(self.volume.read(mapping[0].disk_block_idx * self.volume.block_size + offset, mapping[0].block_count * self.volume.block_size - offset))
-                byte_len -= len(blocks[0])
+        result = b"".join(blocks)
 
-                for i in range(1, len(mapping) - 1):
-                    part = self.volume.read(mapping[i].disk_block_idx * self.volume.block_size, mapping[i].block_count * self.volume.block_size)
-                    blocks.append(part)
-
-                    byte_len -= len(part)
-
-                blocks.append(self.volume.read(mapping[-1].disk_block_idx * self.volume.block_size, byte_len))
-
-                result = b"".join(blocks)
-
-        # Check whether the volume's underlying stream ended too early
-        self.cursor += len(result)
-
+        # Check read
         if len(result) != end_of_stream_check:
-            raise EndOfStreamError(f"The volume's underlying stream ended {byte_len - len(result):d} bytes before the file.")
+            raise EndOfStreamError(f"The volume's underlying stream ended {byte_len - len(result):d} bytes before EOF.")
 
+        self.cursor += len(result)
         return result
+
+    def read_block (self, file_block_idx):
+        """
+        Reads one block from disk (return a zero-block if the file block is not mapped)
+        """
+        disk_block_idx = self.get_block_mapping(file_block_idx)
+
+        if disk_block_idx != None:
+            return self.volume.read(disk_block_idx * self.volume.block_size, self.volume.block_size)
+        else:
+            return bytes([0] * self.volume.block_size)
 
     def seek (self, seek, seek_mode = io.SEEK_SET):
         """
