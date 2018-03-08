@@ -26,13 +26,13 @@ Iterating over directory entries:
     ..
     example_file
     example_image.jpg
-    
+
     >>> # sorted
     >>> for file_name, inode_idx, file_type in sorted(example_dir.open_dir(), key = ext4.Inode.directory_entry_key):
     >>>     print(file_name)
 
     >>> # Fancy and customizable
-    >>> ext4.Tools.list_dir(volume, exmaple_dir)
+    >>> ext4.Tools.list_dir(volume, example_dir)
     drwxr-xr-x    1.00 KiB  .
     drwxr-xr-x    1.00 KiB  ..
     -rw-r--r--    12 bytes  example_file
@@ -40,7 +40,7 @@ Iterating over directory entries:
 
 Getting an inode by its index:
 
-    >>> root = volume.get_inode(ext4.Volume.ROOT_INODE) # == volume.root
+    >>> root = volume.get_inode(ext4.Volume.ROOT_INODE, ext4.InodeType.DIRECTORY) # == volume.root
 
 Getting an inode by its path:
 
