@@ -169,8 +169,8 @@ class ext4_group_descriptor (ext4_struct):
         ("bg_reserved", ctypes.c_uint),               # 0x003C
     ]
 
-    def _from_buffer_copy (raw, platform64 = True):
-        struct = ext4_group_descriptor.from_buffer_copy(raw)
+    def _from_buffer_copy (raw, offset = 0, platform64 = True):
+        struct = ext4_group_descriptor.from_buffer_copy(raw, offset)
 
         if not platform64:
             struct.bg_block_bitmap_hi = 0
@@ -257,11 +257,13 @@ class ext4_inode (ext4_struct):
 
 
 class ext4_superblock (ext4_struct):
-    EXT2_DESC_SIZE = 0x20 # Default value for s_desc_size, if INCOMPAT_64BIT is not set (NEEDS CONFIRMATION)
+    EXT2_MIN_DESC_SIZE = 0x20 # Default value for s_desc_size, if INCOMPAT_64BIT is not set (NEEDS CONFIRMATION)
+    EXT2_MIN_DESC_SIZE_64BIT = 0x40 # Default value for s_desc_size, if INCOMPAT_64BIT is set
 
     # s_feature_incompat
     INCOMPAT_64BIT    = 0x80 # Uses 64-bit features (e.g. *_hi structure fields in ext4_group_descriptor)
     INCOMPAT_FILETYPE =  0x2 # Directory entries record file type (instead of inode flags)
+
     _fields_ = [
         ("s_inodes_count", ctypes.c_uint),                 # 0x0000
         ("s_blocks_count_lo", ctypes.c_uint),              # 0x0004
@@ -404,8 +406,11 @@ class ext4_superblock (ext4_struct):
             struct.s_reserved = 0
             struct.s_checksum = 0
 
-        if (struct.s_feature_incompat & ext4_superblock.INCOMPAT_64BIT) == 0:
-            struct.s_desc_size = ext4_superblock.EXT2_DESC_SIZE
+        if struct.s_desc_size == 0:
+            if (struct.s_feature_incompat & ext4_superblock.INCOMPAT_64BIT) == 0:
+                struct.s_desc_size = ext4_superblock.EXT2_MIN_DESC_SIZE
+            else:
+                struct.s_desc_size = ext4_superblock.EXT2_MIN_DESC_SIZE_64BIT
 
         return struct
 
@@ -571,7 +576,7 @@ class Volume:
         """
         return 1 << (10 + self.superblock.s_log_block_size)
 
-    def get_inode (self, inode_idx, file_type = InodeType.UNKNOWN):
+    def get_inode (self, inode_idx):
         """
         Returns an Inode instance representing the inode specified by its index inode_idx.
         """
@@ -580,7 +585,7 @@ class Volume:
         inode_table_offset = self.group_descriptors[group_idx].bg_inode_table * self.block_size
         inode_offset = inode_table_offset + inode_table_entry_idx * self.superblock.s_inode_size
 
-        return Inode(self, inode_offset, inode_idx, file_type)
+        return Inode(self, inode_offset, inode_idx)
 
     def get_inode_group (self, inode_idx):
         """
@@ -615,7 +620,7 @@ class Volume:
         """
         Returns the volume's root inode
         """
-        return self.get_inode(Volume.ROOT_INODE, InodeType.DIRECTORY)
+        return self.get_inode(Volume.ROOT_INODE)
 
     @property
     def uuid (self):
@@ -633,7 +638,7 @@ class Inode:
     Provides functionality for parsing inodes and accessing their raw data
     """
 
-    def __init__ (self, volume, offset, inode_idx, file_type = InodeType.UNKNOWN):
+    def __init__ (self, volume, offset, inode_idx):
         """
         Initializes a new inode parser at the specified offset within the specified volume. file_type is the file type
         of the inode as given by the directory entry referring to this inode.
@@ -642,7 +647,6 @@ class Inode:
         self.offset = offset
         self.volume = volume
 
-        self.file_type = file_type
         self.inode = volume.read_struct(ext4_inode, offset)
 
     def __len__ (self):
@@ -695,7 +699,7 @@ class Inode:
 
             if xattr_entry.e_value_inum != 0:
                 # external xattr
-                xattr_inode = self.volume.get_inode(xattr.e_value_inum, InodeType.FILE)
+                xattr_inode = self.volume.get_inode(xattr.e_value_inum)
 
                 if not self.volume.ignore_flags and (xattr_inode.inode.i_flags & ext4_inode.EXT4_EA_INODE_FL) != 0:
                     raise Ext4Error(f"Inode {xattr_inode.inode_idx:d} associated with the extended attribute {xattr_name!r:s} of inode {self.inode_idx:d} is not marked as large extended attribute value.")
@@ -755,7 +759,7 @@ class Inode:
                 current_path = "/".join(relative_path[:i])
                 raise FileNotFoundError(f"{part!r:s} not found in {current_path!r:s} (Inode {current_inode.inode_idx:d}).")
 
-            current_inode = current_inode.volume.get_inode(inode_idx, file_type)
+            current_inode = current_inode.volume.get_inode(inode_idx)
 
 
         return current_inode
@@ -765,20 +769,14 @@ class Inode:
         """
         Indicates whether the inode is marked as a directory.
         """
-        if (self.volume.superblock.s_feature_incompat & ext4_superblock.INCOMPAT_FILETYPE) == 0:
-            return (self.inode.i_mode & ext4_inode.S_IFDIR) != 0
-        else:
-            return self.file_type == InodeType.DIRECTORY
+        return (self.inode.i_mode & ext4_inode.S_IFDIR) != 0
 
     @property
     def is_file (self):
         """
         Indicates whether the inode is marker as a regular file.
         """
-        if (self.volume.superblock.s_feature_incompat & ext4_dir_entry_2.INCOMPAT_FILETYPE) == 0:
-            return (self.inode.i_mode & ext4_inode.S_IFREG) != 0
-        else:
-            return self.file_type == InodeType.FILE
+        return (self.inode.i_mode & ext4_inode.S_IFREG) != 0
 
     @property
     def is_in_use (self):
@@ -805,26 +803,15 @@ class Inode:
         }[(execute, special)]
 
         try:
-            if (self.volume.superblock.s_feature_incompat & ext4_superblock.INCOMPAT_FILETYPE) == 0:
-                device_type = {
-                    ext4_inode.S_IFIFO  : "p",
-                    ext4_inode.S_IFCHR  : "c",
-                    ext4_inode.S_IFDIR  : "d",
-                    ext4_inode.S_IFBLK  : "b",
-                    ext4_inode.S_IFREG  : "-",
-                    ext4_inode.S_IFLNK  : "l",
-                    ext4_inode.S_IFSOCK : "s",
-                }[self.inode.i_mode & 0xF000]
-            else:
-                device_type = {
-                    InodeType.FILE             : "-",
-                    InodeType.DIRECTORY        : "d",
-                    InodeType.CHARACTER_DEVICE : "c",
-                    InodeType.BLOCK_DEVICE     : "b",
-                    InodeType.FIFO             : "p",
-                    InodeType.SOCKET           : "s",
-                    InodeType.SYMBOLIC_LINK    : "l"
-                }[self.file_type]
+            device_type = {
+                ext4_inode.S_IFIFO  : "p",
+                ext4_inode.S_IFCHR  : "c",
+                ext4_inode.S_IFDIR  : "d",
+                ext4_inode.S_IFBLK  : "b",
+                ext4_inode.S_IFREG  : "-",
+                ext4_inode.S_IFLNK  : "l",
+                ext4_inode.S_IFSOCK : "s",
+            }[self.inode.i_mode & 0xF000]
         except KeyError:
             device_type = "?"
 
@@ -1105,7 +1092,7 @@ class Tools:
 
             line_format(
                 file_name = file_name, # Entry name
-                inode = volume.get_inode(inode_idx, file_type), # Referenced inode
+                inode = volume.get_inode(inode_idx), # Referenced inode
                 file_type = file_type, # Entry type (int)
                 file_type_str = file_types[file_type] if file_type in file_types else "?" # Entry type (str, see next paragraph)
             )
@@ -1125,7 +1112,7 @@ class Tools:
         if isinstance(identifier, Inode):
             inode = identifier
         elif isinstance(identifier, int):
-            inode = volume.get_inode(identifier, InodeType.DIRECTORY)
+            inode = volume.get_inode(identifier)
         elif isinstance(identifier, str):
             identifier = identifier.strip(" /").split("/")
 
@@ -1154,7 +1141,7 @@ class Tools:
         for file_name, inode_idx, file_type in entries:
             print(line_format(
                 file_name = file_name,
-                inode = volume.get_inode(inode_idx, file_type),
+                inode = volume.get_inode(inode_idx),
                 file_type = file_type,
                 file_type_str = file_types[file_type] if file_type in file_types else "?"
             ))
