@@ -10,8 +10,9 @@ dependencies = []
 dynamic = ["readme"]
 
 [tool.setuptools]
-packages = [
+py-modules = [
   "ext4",
+  "ext4.py35",
 ]
 
 [tool.setuptools.dynamic]
