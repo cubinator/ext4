@@ -1,5 +1,5 @@
 [project]
-name = "ext4-reader"
+name = "ext4"
 version = "1.0.0"
 authors = [
   { name="Cubi" },
@@ -11,7 +11,8 @@ dynamic = ["readme"]
 
 [tool.setuptools]
 packages = [
-    "ext4.py35",
+  "ext4",
+  "ext4.py35",
 ]
 
 [tool.setuptools.dynamic]
