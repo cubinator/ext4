@@ -1,0 +1,22 @@
+[project]
+name = "ext4-reader"
+version = "1.0.0"
+authors = [
+  { name="Cubi" },
+]
+description = "Reading ext4 volumes"
+requires-python = ">=3.5"
+dependencies = []
+dynamic = ["readme"]
+
+[tool.setuptools]
+packages = [
+    "ext4.py35",
+]
+
+[tool.setuptools.dynamic]
+readme = {file= ["README.md"], content-type = "text/markdown"}
+
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
