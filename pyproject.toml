@@ -12,7 +12,6 @@ dynamic = ["readme"]
 [tool.setuptools]
 packages = [
   "ext4",
-  "ext4.py35",
 ]
 
 [tool.setuptools.dynamic]
